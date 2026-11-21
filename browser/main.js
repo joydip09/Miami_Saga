@@ -16,7 +16,9 @@ const ui = {
 };
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+const basePixelRatio = Math.min(devicePixelRatio, 1.5);
+let renderPixelRatio = basePixelRatio;
+renderer.setPixelRatio(renderPixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -29,10 +31,15 @@ const camera = new THREE.PerspectiveCamera(61, innerWidth / innerHeight, 0.1, 33
 camera.position.set(0, 4.3, 10.5);
 const aimPoint = new THREE.Vector3();
 const aimDirection = new THREE.Vector3(0, 0, -1);
+const projectedAim = new THREE.Vector3();
+const previousBulletPosition = new THREE.Vector3();
+const collisionSegment = new THREE.Vector3();
+const collisionToCenter = new THREE.Vector3();
+const collisionClosest = new THREE.Vector3();
 const AIM_DISTANCE = 24;
 
 scene.add(new THREE.HemisphereLight(0x213c78, 0x02030d, 1.55));
-const sun = new THREE.DirectionalLight(0x6c82ff, 1.4); sun.position.set(-22, 26, 12); sun.castShadow = true; sun.shadow.mapSize.set(1024,1024); scene.add(sun);
+const sun = new THREE.DirectionalLight(0x6c82ff, 1.4); sun.position.set(-22, 26, 12); sun.castShadow = true; sun.shadow.mapSize.set(512,512); scene.add(sun);
 const neonKey = new THREE.PointLight(0xff3da8, 18, 70); neonKey.position.set(-8, 9, -28); scene.add(neonKey);
 const cyanKey = new THREE.PointLight(0x28e6ff, 14, 58); cyanKey.position.set(14, 5, -40); scene.add(cyanKey);
 const starPositions = new Float32Array(720 * 3);
@@ -97,18 +104,18 @@ const spriteTexture = new THREE.TextureLoader().load("./assets/spark1.png");
 function spawnObstacle(z=-125){ const group=new THREE.Group(); const targetMaterial=new THREE.MeshStandardMaterial({color:0x24103d,metalness:.72,roughness:.22,emissive:0x94145f,emissiveIntensity:1.8}); const body=new THREE.Mesh(new THREE.IcosahedronGeometry(.82,2),targetMaterial); group.add(body); for(let a=0;a<3;a++){const ring=new THREE.Mesh(new THREE.TorusGeometry(1.35+a*.3,.035,8,32),new THREE.MeshBasicMaterial({color:a%2?0x24e8ff:0xff3daa,transparent:true,opacity:.9}));ring.rotation.set(a*.55,a*.8,a*.35);group.add(ring);} const beacon=new THREE.Mesh(new THREE.SphereGeometry(.16,10,8),new THREE.MeshBasicMaterial({color:0xffd36b})); beacon.position.y=1.05; group.add(beacon); const warning=new THREE.PointLight(0xff2f9f,5,10);group.add(warning); group.position.set((Math.random()-.5)*11,-.2+Math.random()*6,z); scene.add(group); obstacles.push({group, spin:(Math.random()-.5)*2, radius:1.55}); }
 for(let i=0;i<9;i++)spawnObstacle(-38-i*22);
 function segmentIntersectsSphere(start, end, center, radius) {
-  const segment = end.clone().sub(start);
-  const lengthSquared = segment.lengthSq();
+  collisionSegment.subVectors(end, start);
+  const lengthSquared = collisionSegment.lengthSq();
   if (lengthSquared === 0) {
     return start.distanceToSquared(center) <= radius * radius;
   }
-  const projection = clamp(center.clone().sub(start).dot(segment) / lengthSquared, 0, 1);
-  const closest = start.clone().addScaledVector(segment, projection);
-  return closest.distanceToSquared(center) <= radius * radius;
+  const projection = clamp(collisionToCenter.subVectors(center, start).dot(collisionSegment) / lengthSquared, 0, 1);
+  collisionClosest.copy(start).addScaledVector(collisionSegment, projection);
+  return collisionClosest.distanceToSquared(center) <= radius * radius;
 }
 
 function fire(){ if(!started || bullets.length>6)return; const direction=aimDirection.clone().normalize(); const bolt=new THREE.Mesh(new THREE.CylinderGeometry(.045,.045,2.0,6),new THREE.MeshBasicMaterial({color:0xd5fff0})); bolt.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),direction); bolt.position.copy(plane.position).addScaledVector(direction,1.5); scene.add(bolt); bullets.push({mesh:bolt, velocity:direction.multiplyScalar(105), life:2.5}); ui.weapon.textContent="SKYFIRE / FIRING"; setTimeout(()=>ui.weapon.textContent="SKYFIRE / ARMED",180); }
-function explode(position){ for(let i=0;i<18;i++){const p=new THREE.Sprite(new THREE.SpriteMaterial({map:spriteTexture,color:i%2?0xffcf71:0xff6848,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));p.scale.setScalar(.5+Math.random()*.55);p.position.copy(position);scene.add(p);particles.push({mesh:p,velocity:new THREE.Vector3((Math.random()-.5)*7,(Math.random()-.5)*7,(Math.random()-.5)*7),life:.55+Math.random()*.45});} }
+function explode(position){ if(particles.length>90)return; for(let i=0;i<18;i++){const p=new THREE.Sprite(new THREE.SpriteMaterial({map:spriteTexture,color:i%2?0xffcf71:0xff6848,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));p.scale.setScalar(.5+Math.random()*.55);p.position.copy(position);scene.add(p);particles.push({mesh:p,velocity:new THREE.Vector3((Math.random()-.5)*7,(Math.random()-.5)*7,(Math.random()-.5)*7),life:.55+Math.random()*.45});} }
 
 let socket, reconnectTimer, started=false, score=0, distance=0, fireSeen=0;
 const controls={roll:0,pitch:0, keys:{}};
@@ -134,6 +141,15 @@ ui.config.addEventListener("click",()=>showConfig()); ui.closeConfig.addEventLis
 ui.restart.addEventListener("click",()=>location.reload());
 function resize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);} addEventListener("resize",resize);
 const clock=new THREE.Clock();
+let qualitySampleTime=0, qualityFrameCount=0, qualityFrameTime=0;
+function tuneRenderQuality(dt){
+  qualitySampleTime += dt; qualityFrameCount += 1; qualityFrameTime += dt * 1000;
+  if(qualitySampleTime < 1)return;
+  const averageFrameTime = qualityFrameTime / qualityFrameCount;
+  if(averageFrameTime > 24 && renderPixelRatio > .85){ renderPixelRatio=Math.max(.85,renderPixelRatio-.1); renderer.setPixelRatio(renderPixelRatio); }
+  else if(averageFrameTime < 16 && renderPixelRatio < basePixelRatio){ renderPixelRatio=Math.min(basePixelRatio,renderPixelRatio+.05); renderer.setPixelRatio(renderPixelRatio); }
+  qualitySampleTime=0; qualityFrameCount=0; qualityFrameTime=0;
+}
 function update(dt){ const keyRoll=(controls.keys.a||controls.keys.arrowleft?-1:0)+(controls.keys.d||controls.keys.arrowright?1:0); const keyPitch=(controls.keys.w||controls.keys.arrowup?1:0)+(controls.keys.s||controls.keys.arrowdown?-1:0); const roll=clamp(controls.roll+keyRoll,-1,1), pitch=clamp(controls.pitch+keyPitch,-1,1); if(started){plane.position.x=THREE.MathUtils.damp(plane.position.x,roll*6,3.5,dt);plane.position.y=THREE.MathUtils.damp(plane.position.y,.2+pitch*3.2,3.5,dt);plane.rotation.z=THREE.MathUtils.damp(plane.rotation.z,-roll*.54,5,dt);plane.rotation.x=THREE.MathUtils.damp(plane.rotation.x,pitch*.28,5,dt);distance+=dt*38;city.children.forEach(b=>{b.position.z+=dt*38;if(b.position.z>22)b.position.z-=870;});obstacles.forEach(o=>{o.group.position.z+=dt*38;o.group.rotation.y+=dt*o.spin;if(o.group.position.z>15){o.group.position.z=-180;o.group.position.x=(Math.random()-.5)*11;o.group.position.y=-.2+Math.random()*6;}});}
  if (started) {
   wingRotors.forEach(({rotor,direction})=>{rotor.rotation.z += dt * 34 * direction;});
@@ -145,13 +161,13 @@ function update(dt){ const keyRoll=(controls.keys.a||controls.keys.arrowleft?-1:
  camera.position.x=THREE.MathUtils.damp(camera.position.x,plane.position.x*.26,2.5,dt);camera.position.y=THREE.MathUtils.damp(camera.position.y,plane.position.y+4.2,2,dt);camera.lookAt(plane.position.x*.34,plane.position.y-.15,-11);
  aimDirection.set(0,0,-1).applyQuaternion(plane.quaternion).normalize();
  aimPoint.copy(plane.position).addScaledVector(aimDirection,AIM_DISTANCE);
- const projectedAim = aimPoint.clone().project(camera);
+ projectedAim.copy(aimPoint).project(camera);
  const aimVisible = projectedAim.z > -1 && projectedAim.z < 1;
  ui.reticle.style.left = `${(projectedAim.x * 0.5 + 0.5) * innerWidth}px`;
  ui.reticle.style.top = `${(-projectedAim.y * 0.5 + 0.5) * innerHeight}px`;
  ui.reticle.style.opacity = aimVisible ? "0.82" : "0.22";
- for(let i=bullets.length-1;i>=0;i--){const b=bullets[i];const previousPosition=b.mesh.position.clone();b.mesh.position.addScaledVector(b.velocity,dt);b.life-=dt;if(b.life<0){scene.remove(b.mesh);bullets.splice(i,1);continue;}for(let j=obstacles.length-1;j>=0;j--){const o=obstacles[j];if(segmentIntersectsSphere(previousPosition,b.mesh.position,o.group.position,o.radius+1.3)){explode(o.group.position);scene.remove(o.group);obstacles.splice(j,1);scene.remove(b.mesh);bullets.splice(i,1);score+=250;spawnObstacle(-185);break;}}}
+ for(let i=bullets.length-1;i>=0;i--){const b=bullets[i];previousBulletPosition.copy(b.mesh.position);b.mesh.position.addScaledVector(b.velocity,dt);b.life-=dt;if(b.life<0){scene.remove(b.mesh);bullets.splice(i,1);continue;}for(let j=obstacles.length-1;j>=0;j--){const o=obstacles[j];if(segmentIntersectsSphere(previousBulletPosition,b.mesh.position,o.group.position,o.radius+1.3)){explode(o.group.position);scene.remove(o.group);obstacles.splice(j,1);scene.remove(b.mesh);bullets.splice(i,1);score+=250;spawnObstacle(-185);break;}}}
  for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.mesh.position.addScaledVector(p.velocity,dt);p.mesh.scale.multiplyScalar(.985);p.life-=dt;if(p.life<=0){scene.remove(p.mesh);particles.splice(i,1);}}
  ui.altitude.textContent=Math.round(420+plane.position.y*55);ui.speed.textContent=Math.round(318+Math.abs(roll)*14);ui.score.textContent=String(score).padStart(6,"0");ui.ammo.style.width=`${Math.max(15,100-bullets.length*12)}%`;
 }
-function loop(){const dt=Math.min(clock.getDelta(),.05);update(dt);renderer.render(scene,camera);requestAnimationFrame(loop);} if(storedHost){connectConfigured();}else{setConnection("NOT CONFIGURED");}loop();
+function loop(){const dt=Math.min(clock.getDelta(),.05);tuneRenderQuality(dt);update(dt);renderer.render(scene,camera);requestAnimationFrame(loop);} if(storedHost){connectConfigured();}else{setConnection("NOT CONFIGURED");}loop();

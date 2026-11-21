@@ -50,39 +50,40 @@ const ocean = new THREE.Mesh(new THREE.PlaneGeometry(360, 600), new THREE.MeshSt
 const beach = new THREE.Mesh(new THREE.PlaneGeometry(35,600),new THREE.MeshStandardMaterial({color:0x34214d,roughness:.82,emissive:0x120820,emissiveIntensity:.35})); beach.rotation.x=-Math.PI/2; beach.position.set(21,-3.15,-100); scene.add(beach);
 
 const plane = new THREE.Group();
-const planeBody = new THREE.MeshStandardMaterial({color:0xece5cf, metalness:.72, roughness:.27});
-const planeTrim = new THREE.MeshStandardMaterial({color:0x092d45, metalness:.55, roughness:.3});
-const glow = new THREE.MeshStandardMaterial({color:0xff704f, emissive:0xc3251d, emissiveIntensity:3});
-function part(geometry, material, x,y,z, rx=0,ry=0,rz=0){ const mesh=new THREE.Mesh(geometry,material); mesh.position.set(x,y,z); mesh.rotation.set(rx,ry,rz); mesh.castShadow=true; plane.add(mesh); return mesh; }
-part(new THREE.CylinderGeometry(.38,.58,4.8,12),planeBody,0,0,0,Math.PI/2,0,0);
-part(new THREE.ConeGeometry(.38,1.4,12),planeBody,0,0,2.98,-Math.PI/2,0,0);
-part(new THREE.BoxGeometry(7,.12,1.15),planeBody,0,-.02,-.25,0,0,.03);
-part(new THREE.BoxGeometry(2.35,.12,.72),planeTrim,0,.34,-2.08,0,0,.08);
-part(new THREE.BoxGeometry(.18,1.28,.72),planeTrim,0,.48,-2.3,0,0,0);
-part(new THREE.BoxGeometry(.12,.84,.52),glow,0,.53,-2.39,0,0,0);
-const bladeMaterial = new THREE.MeshStandardMaterial({color:0x030508, metalness:.72, roughness:.3});
-const tailLightMaterial = new THREE.MeshStandardMaterial({color:0xff4b91,emissive:0xff1677,emissiveIntensity:3.2});
-const tailBoom = part(new THREE.CylinderGeometry(.22,.46,1.45,10),planeTrim,0,.08,-2.45,Math.PI/2,0,0);
-tailBoom.castShadow = true;
-const tailLight = part(new THREE.SphereGeometry(.13,12,8),tailLightMaterial,0,.42,-3.62);
-
-const tailBeacon = new THREE.PointLight(0xff3f9f,1.8,5);
-tailBeacon.position.set(0,.42,-3.62);
-plane.add(tailBeacon);
+const planeVisual = new THREE.Group();
+planeVisual.rotation.y = Math.PI;
+plane.add(planeVisual);
+const planeBody = new THREE.MeshPhysicalMaterial({color:0x7e9bb0, metalness:.86, roughness:.18, clearcoat:1, clearcoatRoughness:.08, reflectivity:.95});
+const planeTrim = new THREE.MeshPhysicalMaterial({color:0x071b31, metalness:.9, roughness:.2, clearcoat:.8, clearcoatRoughness:.1});
+const canopyMaterial = new THREE.MeshPhysicalMaterial({color:0x071426, metalness:.35, roughness:.08, transmission:.08, clearcoat:1, clearcoatRoughness:.04, emissive:0x071d38, emissiveIntensity:.7});
+const cyanGlow = new THREE.MeshStandardMaterial({color:0x45efff, emissive:0x12dfff, emissiveIntensity:4.5, metalness:.35, roughness:.18});
+const magentaGlow = new THREE.MeshStandardMaterial({color:0xff4cc4, emissive:0xff167e, emissiveIntensity:3.2});
+function part(geometry, material, x,y,z, rx=0,ry=0,rz=0){ const mesh=new THREE.Mesh(geometry,material); mesh.position.set(x,y,z); mesh.rotation.set(rx,ry,rz); mesh.castShadow=true; planeVisual.add(mesh); return mesh; }
+// Slim reflective fuselage: local +Z is the nose; planeVisual flips it into flight direction.
+part(new THREE.CylinderGeometry(.28,.52,5.35,16),planeBody,0,0,0,Math.PI/2,0,0);
+part(new THREE.ConeGeometry(.28,1.35,16),planeBody,0,0,3.18,-Math.PI/2,0,0);
+part(new THREE.SphereGeometry(.42,16,10),canopyMaterial,0,.27,1.12,0,0,0);
+part(new THREE.BoxGeometry(6.9,.11,1.18),planeBody,0,-.04,.15,0,0,.035);
+part(new THREE.BoxGeometry(2.45,.09,.72),planeTrim,0,.18,-2.12,0,0,.04);
+part(new THREE.BoxGeometry(.16,1.45,.62),planeTrim,0,.52,-2.28,0,0,0);
+part(new THREE.BoxGeometry(.11,.88,.5),magentaGlow,0,.53,-2.36,0,0,0);
+// Tapered tail boom and rear beacon, matching the reference silhouette.
+part(new THREE.CylinderGeometry(.18,.38,1.35,12),planeTrim,0,.06,-2.48,Math.PI/2,0,0);
+const bladeMaterial = new THREE.MeshPhysicalMaterial({color:0x020307, metalness:.88, roughness:.25, clearcoat:.45});
+const tailLightMaterial = new THREE.MeshStandardMaterial({color:0xff55c8,emissive:0xff1677,emissiveIntensity:3.2});
+const tailLight = part(new THREE.SphereGeometry(.12,12,8),tailLightMaterial,0,.42,-3.25);
+const tailBeacon = new THREE.PointLight(0xff3f9f,1.8,5); tailBeacon.position.set(0,.42,-3.25); planeVisual.add(tailBeacon);
+const wingLights=[];
 const wingRotors=[];
-for (const x of [-2.55, 2.55]) {
-  const rotor = new THREE.Group();
-  rotor.position.set(x,.02,1.82);
-  const hub = new THREE.Mesh(new THREE.SphereGeometry(.13,10,8),glow);
-  rotor.add(hub);
-  for (let bladeIndex=0; bladeIndex<3; bladeIndex+=1) {
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(.12,.92,.06),bladeMaterial);
-    blade.rotation.z = bladeIndex * Math.PI * 2 / 3;
-    rotor.add(blade);
-  }
-  plane.add(rotor);
-  wingRotors.push({rotor, direction:x<0?1:-1});
+for (const x of [-2.55,2.55]) {
+  const nacelle = part(new THREE.CylinderGeometry(.22,.28,.62,14),planeTrim,x,.01,.55,Math.PI/2,0,0);
+  const ring = part(new THREE.TorusGeometry(.22,.045,8,24),cyanGlow,x,.01,.88,Math.PI/2,0,0);
+  const wingLight = new THREE.PointLight(0x2deaff,1.7,4); wingLight.position.set(x,.02,.9); planeVisual.add(wingLight); wingLights.push(wingLight);
+  const rotor = new THREE.Group(); rotor.position.set(x,.02,1.72); rotor.add(new THREE.Mesh(new THREE.SphereGeometry(.12,10,8),bladeMaterial));
+  for(let bladeIndex=0; bladeIndex<3; bladeIndex+=1){const blade=new THREE.Mesh(new THREE.BoxGeometry(.1,.82,.045),bladeMaterial);blade.rotation.z=bladeIndex*Math.PI*2/3;rotor.add(blade);}
+  planeVisual.add(rotor); wingRotors.push({rotor,direction:x<0?1:-1});
 }
+
 plane.position.set(0,.2,1.3); plane.scale.setScalar(.64); scene.add(plane);
 
 const city = new THREE.Group(); scene.add(city);

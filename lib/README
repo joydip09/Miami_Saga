@@ -1,0 +1,1 @@
+The Adafruit MPU6050 library is modified for MPU6050 and MPU6500, which have different WHO_AM_I values. This works with both WHO_AM_I addresses: 0x68, 0x70.

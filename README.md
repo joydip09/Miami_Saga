@@ -22,6 +22,8 @@ MPU6050 tilt + GPIO 21 trigger
 
 The game runs in the browser. The ESP32 is a wireless motion controller; it does not host the game files.
 
+The aircraft includes rotating wing blades, a swept tail with a pulsing tail beacon, neon-lit target rings, and a local star field.
+
 ## Hardware and pin map
 
 | Device | ESP32-S3 pin | Notes |

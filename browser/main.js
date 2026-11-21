@@ -1,694 +1,104 @@
-import * as THREE from "three";
+import * as THREE from "./vendor/three.module.js";
+import { buildWebSocketUrl, clamp, parseControlPacket, projectPlaneControl } from "./game-core.js";
 
-const viewport = document.querySelector("#viewport");
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x05030e);
-scene.fog = new THREE.Fog(0x05030e, 8, 22);
+const canvas = document.querySelector("#game");
+const ui = {
+  altitude: document.querySelector("#altitude"), speed: document.querySelector("#speed"), score: document.querySelector("#score"),
+  ammo: document.querySelector("#ammo-bar"), weapon: document.querySelector("#weapon-state"), state: document.querySelector("#connection-state"),
+  dot: document.querySelector("#connection-dot"), config: document.querySelector("#config-button"), launch: document.querySelector("#launch-button"),
+  panel: document.querySelector("#connection-panel"), form: document.querySelector("#connection-form"), host: document.querySelector("#esp32-host"),
+  closeConfig: document.querySelector("#close-config"), error: document.querySelector("#connection-error"),
+  sensitivity: document.querySelector("#sensitivity"), sensitivityValue: document.querySelector("#sensitivity-value"),
+  tabs: document.querySelectorAll(".landing-tab"), tabPanels: document.querySelectorAll(".landing-tab-panel"),
+  restart: document.querySelector("#restart-button"),
+  reticle: document.querySelector(".reticle"),
+  start: document.querySelector("#start-screen"), toast: document.querySelector("#toast"),
+};
 
-const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-camera.position.set(4.1, 2.9, 5.2);
-camera.lookAt(0, 0, 0);
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
-viewport.appendChild(renderer.domElement);
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.25;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x030817);
+scene.fog = new THREE.FogExp2(0x07152b, 0.012);
+const camera = new THREE.PerspectiveCamera(61, innerWidth / innerHeight, 0.1, 330);
+camera.position.set(0, 4.3, 10.5);
+const aimPoint = new THREE.Vector3();
+const aimDirection = new THREE.Vector3(0, 0, -1);
+const AIM_DISTANCE = 24;
 
-scene.add(new THREE.HemisphereLight(0x9cecff, 0x170b2e, 2.2));
+scene.add(new THREE.HemisphereLight(0x213c78, 0x02030d, 1.55));
+const sun = new THREE.DirectionalLight(0x6c82ff, 1.4); sun.position.set(-22, 26, 12); sun.castShadow = true; sun.shadow.mapSize.set(1024,1024); scene.add(sun);
+const neonKey = new THREE.PointLight(0xff3da8, 18, 70); neonKey.position.set(-8, 9, -28); scene.add(neonKey);
+const cyanKey = new THREE.PointLight(0x28e6ff, 14, 58); cyanKey.position.set(14, 5, -40); scene.add(cyanKey);
+const ocean = new THREE.Mesh(new THREE.PlaneGeometry(360, 600), new THREE.MeshStandardMaterial({ color:0x061b3d, roughness:.18, metalness:.62 })); ocean.rotation.x=-Math.PI/2; ocean.position.y=-3.2; ocean.receiveShadow=true; scene.add(ocean);
+const beach = new THREE.Mesh(new THREE.PlaneGeometry(35,600),new THREE.MeshStandardMaterial({color:0x34214d,roughness:.82,emissive:0x120820,emissiveIntensity:.35})); beach.rotation.x=-Math.PI/2; beach.position.set(21,-3.15,-100); scene.add(beach);
 
-const keyLight = new THREE.DirectionalLight(0x8df8ff, 3.2);
-keyLight.position.set(3, 5, 4);
-keyLight.castShadow = true;
-scene.add(keyLight);
+const plane = new THREE.Group();
+const planeBody = new THREE.MeshStandardMaterial({color:0xece5cf, metalness:.72, roughness:.27});
+const planeTrim = new THREE.MeshStandardMaterial({color:0x092d45, metalness:.55, roughness:.3});
+const glow = new THREE.MeshStandardMaterial({color:0xff704f, emissive:0xc3251d, emissiveIntensity:3});
+function part(geometry, material, x,y,z, rx=0,ry=0,rz=0){ const mesh=new THREE.Mesh(geometry,material); mesh.position.set(x,y,z); mesh.rotation.set(rx,ry,rz); mesh.castShadow=true; plane.add(mesh); return mesh; }
+part(new THREE.CylinderGeometry(.38,.58,4.8,12),planeBody,0,0,0,Math.PI/2,0,0);
+part(new THREE.ConeGeometry(.38,1.4,12),planeBody,0,0,2.98,-Math.PI/2,0,0);
+part(new THREE.BoxGeometry(7,.12,1.15),planeBody,0,-.02,-.25,0,0,.03);
+part(new THREE.BoxGeometry(2.1,.1,.72),planeBody,0,.38,-2.05,0,0,0);
+part(new THREE.BoxGeometry(.12,1.05,.7),planeTrim,0,.46,-2.32,0,0,0);
+for (const x of [-.95,.95]) { part(new THREE.CylinderGeometry(.2,.27,.65,10),planeTrim,x,-.12,-.52,Math.PI/2,0,0); part(new THREE.CylinderGeometry(.12,.12,.11,10),glow,x,-.12,-.86,Math.PI/2,0,0); }
+plane.position.set(0,.2,1.3); plane.scale.setScalar(.64); scene.add(plane);
 
-const rimLight = new THREE.DirectionalLight(0xff3bd4, 1.8);
-rimLight.position.set(-4, 2, -3);
-scene.add(rimLight);
+const city = new THREE.Group(); scene.add(city);
+const windowMaterials=[0x16e4ff,0xff3daa,0xffc857,0x7d6cff].map(c=>new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:2.4,roughness:.3}));
+const buildingMats=[0x111d38,0x18284a,0x251d48,0x302040,0x102f4a].map(c=>new THREE.MeshStandardMaterial({color:c,roughness:.64,metalness:.3}));
+function seeded(n){ return (Math.sin(n*999.7)*43758.55)%1; }
+for(let i=0;i<155;i++) { const seed=i*19.7; const side=i%2?1:-1; const width=2+Math.abs(seeded(seed))*3.8; const depth=2+Math.abs(seeded(seed+2))*4; const h=4+Math.abs(seeded(seed+3))*24; const building=new THREE.Group(); const core=new THREE.Mesh(new THREE.BoxGeometry(width,h,depth),buildingMats[i%buildingMats.length]); core.position.y=h/2-3.1; core.castShadow=true; building.add(core); const floors=Math.floor(h/2.4); for(let f=0;f<floors;f+=2){const windows=new THREE.Mesh(new THREE.BoxGeometry(width*.72,.32,.05),windowMaterials[(i+f)%windowMaterials.length]); windows.position.set(0,-2.1+f*2.35,depth/2+.03);building.add(windows);} building.position.set(side*(8+Math.abs(seeded(seed+7))*17),0,-20-i*5.6); city.add(building); }
 
-const device = new THREE.Group();
-const droneBodyMaterial = new THREE.MeshStandardMaterial({
-  color: 0x25213d,
-  metalness: 0.62,
-  roughness: 0.32,
-});
-const droneDarkMaterial = new THREE.MeshStandardMaterial({
-  color: 0x0b0a18,
-  metalness: 0.38,
-  roughness: 0.48,
-});
-const droneGlowMaterial = new THREE.MeshStandardMaterial({
-  color: 0x47f4ff,
-  emissive: 0x087e99,
-  emissiveIntensity: 1.8,
-  metalness: 0.2,
-  roughness: 0.25,
-});
-const bladeMaterial = new THREE.MeshStandardMaterial({
-  color: 0xff4edb,
-  emissive: 0x7d0c72,
-  emissiveIntensity: 1.5,
-  metalness: 0.12,
-  roughness: 0.3,
-});
-const armamentMaterial = new THREE.MeshStandardMaterial({
-  color: 0xe7b44c,
-  emissive: 0x5f260d,
-  emissiveIntensity: 0.45,
-  metalness: 0.72,
-  roughness: 0.24,
-});
-const weaponGlowMaterial = new THREE.MeshStandardMaterial({
-  color: 0xff765c,
-  emissive: 0xc32631,
-  emissiveIntensity: 1.4,
-});
+const obstacles=[], bullets=[], particles=[];
+const spriteTexture = new THREE.TextureLoader().load("./assets/spark1.png");
+function spawnObstacle(z=-125){ const group=new THREE.Group(); const targetMaterial=new THREE.MeshStandardMaterial({color:0x24103d,metalness:.72,roughness:.22,emissive:0x94145f,emissiveIntensity:1.8}); const body=new THREE.Mesh(new THREE.IcosahedronGeometry(.82,2),targetMaterial); group.add(body); for(let a=0;a<3;a++){const ring=new THREE.Mesh(new THREE.TorusGeometry(1.35+a*.3,.035,8,32),new THREE.MeshBasicMaterial({color:a%2?0x24e8ff:0xff3daa,transparent:true,opacity:.9}));ring.rotation.set(a*.55,a*.8,a*.35);group.add(ring);} const beacon=new THREE.Mesh(new THREE.SphereGeometry(.16,10,8),new THREE.MeshBasicMaterial({color:0xffd36b})); beacon.position.y=1.05; group.add(beacon); const warning=new THREE.PointLight(0xff2f9f,5,10);group.add(warning); group.position.set((Math.random()-.5)*11,-.2+Math.random()*6,z); scene.add(group); obstacles.push({group, spin:(Math.random()-.5)*2, radius:1.55}); }
+for(let i=0;i<9;i++)spawnObstacle(-38-i*22);
+function fire(){ if(!started || bullets.length>6)return; const bolt=new THREE.Mesh(new THREE.CylinderGeometry(.045,.045,2.0,6),new THREE.MeshBasicMaterial({color:0xd5fff0})); bolt.rotation.x=Math.PI/2; bolt.position.copy(plane.position).add(new THREE.Vector3(0,.05,-1.5)); scene.add(bolt); bullets.push({mesh:bolt, life:1.4}); ui.weapon.textContent="SKYFIRE / FIRING"; setTimeout(()=>ui.weapon.textContent="SKYFIRE / ARMED",180); }
+function explode(position){ for(let i=0;i<18;i++){const p=new THREE.Sprite(new THREE.SpriteMaterial({map:spriteTexture,color:i%2?0xffcf71:0xff6848,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));p.scale.setScalar(.5+Math.random()*.55);p.position.copy(position);scene.add(p);particles.push({mesh:p,velocity:new THREE.Vector3((Math.random()-.5)*7,(Math.random()-.5)*7,(Math.random()-.5)*7),life:.55+Math.random()*.45});} }
 
-const body = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.7, 0.95, 0.34, 6),
-  droneBodyMaterial,
-);
-body.rotation.y = Math.PI / 6;
-body.position.y = 0.12;
-body.castShadow = true;
-body.receiveShadow = true;
-device.add(body);
+let socket, reconnectTimer, started=false, score=0, distance=0, fireSeen=0;
+const controls={roll:0,pitch:0, keys:{}};
+const storedSensitivity = Number(localStorage.getItem("miami-saga.sensitivity"));
+let sensitivity = Number.isFinite(storedSensitivity)
+  ? (storedSensitivity > 1 ? storedSensitivity / 100 : storedSensitivity)
+  : Number(ui.sensitivity.value) / 100;
+sensitivity = clamp(sensitivity, 0.45, 1);
+ui.sensitivity.value = Math.round(sensitivity * 100);
+ui.sensitivityValue.textContent = `${Math.round(sensitivity * 100)}%`;
+const storedHost = localStorage.getItem("miami-saga.esp32-host");
+if (storedHost) ui.host.value = storedHost;
+function setConnection(state){ const online=state==="ONLINE"; ui.state.textContent=`CONTROLLER ${state}`; ui.dot.classList.toggle("online",online); ui.config.textContent=online?"CONFIGURE LINK":"CONFIGURE LINK"; }
+function toast(message){ui.toast.textContent=message;ui.toast.classList.add("visible");setTimeout(()=>ui.toast.classList.remove("visible"),1800);}
+function showConfig(message=""){ ui.error.textContent=message; ui.panel.hidden=false; ui.host.focus(); }
+function hideConfig(){ ui.panel.hidden=true; ui.error.textContent=""; }
+function connectConfigured(){ const url=buildWebSocketUrl(ui.host.value); if(!url){showConfig("Enter a valid ESP32 IP address or host name.");return;} localStorage.setItem("miami-saga.esp32-host",ui.host.value.trim()); if(socket) socket.close(); setConnection("CONNECTING"); const currentSocket=new WebSocket(url); socket=currentSocket; currentSocket.addEventListener("open",()=>{if(socket!==currentSocket)return;setConnection("ONLINE");hideConfig();toast("MPU6050 LINK ESTABLISHED");}); currentSocket.addEventListener("message",event=>{const packet=parseControlPacket(event.data);if(!packet)return; const next=projectPlaneControl(packet);controls.roll=-next.roll*sensitivity;controls.pitch=next.pitch*sensitivity;if(packet.fire>fireSeen){fireSeen=packet.fire;fire();}}); currentSocket.addEventListener("close",()=>{if(socket!==currentSocket)return;socket=undefined;setConnection("OFFLINE");clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{if(ui.host.value.trim())connectConfigured();},3000);}); currentSocket.addEventListener("error",()=>currentSocket.close()); }
 
-const topShell = new THREE.Mesh(
-  new THREE.SphereGeometry(0.58, 6, 3, 0, Math.PI * 2, 0, Math.PI / 2),
-  droneDarkMaterial,
-);
-topShell.scale.y = 0.42;
-topShell.position.y = 0.3;
-device.add(topShell);
-
-const cockpit = new THREE.Mesh(
-  new THREE.BoxGeometry(0.34, 0.16, 0.52),
-  droneGlowMaterial,
-);
-cockpit.rotation.y = Math.PI / 2;
-cockpit.position.set(0.48, 0.3, 0);
-cockpit.scale.z = 0.72;
-device.add(cockpit);
-
-const tailFin = new THREE.Mesh(
-  new THREE.BoxGeometry(0.58, 0.42, 0.12),
-  droneBodyMaterial,
-);
-tailFin.position.set(-0.42, 0.36, 0);
-tailFin.rotation.z = -0.2;
-device.add(tailFin);
-
-const frontNose = new THREE.Mesh(
-  new THREE.BoxGeometry(0.42, 0.2, 0.68),
-  droneBodyMaterial,
-);
-frontNose.rotation.y = Math.PI / 2;
-frontNose.position.set(0.56, 0.16, 0);
-frontNose.scale.z = 0.72;
-device.add(frontNose);
-
-const frontCheekMaterial = new THREE.MeshStandardMaterial({
-  color: 0x17132b,
-  metalness: 0.68,
-  roughness: 0.3,
-});
-for (const side of [-1, 1]) {
-  const cheek = new THREE.Mesh(
-    new THREE.BoxGeometry(0.42, 0.18, 0.24),
-    frontCheekMaterial,
-  );
-  cheek.position.set(0.56, 0.13, side * 0.42);
-  cheek.rotation.y = side * 0.22;
-  cheek.castShadow = true;
-  device.add(cheek);
+addEventListener("keydown",e=>{controls.keys[e.key.toLowerCase()]=true;if(e.code==="Space"){e.preventDefault();fire();}}); addEventListener("keyup",e=>controls.keys[e.key.toLowerCase()]=false);
+ui.tabs.forEach(tab=>tab.addEventListener("click",()=>{ui.tabs.forEach(item=>item.classList.toggle("active",item===tab));ui.tabPanels.forEach(panel=>{const active=panel.dataset.panel===tab.dataset.tab;panel.classList.toggle("active",active);panel.hidden=!active;});}));
+ui.sensitivity.addEventListener("input",()=>{sensitivity=Number(ui.sensitivity.value)/100;ui.sensitivityValue.textContent=`${ui.sensitivity.value}%`;localStorage.setItem("miami-saga.sensitivity",sensitivity);});
+ui.config.addEventListener("click",()=>showConfig()); ui.closeConfig.addEventListener("click",hideConfig); ui.form.addEventListener("submit",event=>{event.preventDefault();connectConfigured();}); ui.launch.addEventListener("click",()=>{started=true;ui.start.classList.add("hidden");ui.restart.hidden=false;ui.weapon.textContent="SKYFIRE / ARMED";toast("FLIGHT CONTROL LIVE");});
+ui.restart.addEventListener("click",()=>location.reload());
+function resize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);} addEventListener("resize",resize);
+const clock=new THREE.Clock();
+function update(dt){ const keyRoll=(controls.keys.a||controls.keys.arrowleft?-1:0)+(controls.keys.d||controls.keys.arrowright?1:0); const keyPitch=(controls.keys.w||controls.keys.arrowup?1:0)+(controls.keys.s||controls.keys.arrowdown?-1:0); const roll=clamp(controls.roll+keyRoll,-1,1), pitch=clamp(controls.pitch+keyPitch,-1,1); if(started){plane.position.x=THREE.MathUtils.damp(plane.position.x,roll*6,3.5,dt);plane.position.y=THREE.MathUtils.damp(plane.position.y,.2+pitch*3.2,3.5,dt);plane.rotation.z=THREE.MathUtils.damp(plane.rotation.z,-roll*.54,5,dt);plane.rotation.x=THREE.MathUtils.damp(plane.rotation.x,pitch*.28,5,dt);distance+=dt*38;city.children.forEach(b=>{b.position.z+=dt*38;if(b.position.z>22)b.position.z-=870;});obstacles.forEach(o=>{o.group.position.z+=dt*38;o.group.rotation.y+=dt*o.spin;if(o.group.position.z>15){o.group.position.z=-180;o.group.position.x=(Math.random()-.5)*11;o.group.position.y=-.2+Math.random()*6;}});}
+ camera.position.x=THREE.MathUtils.damp(camera.position.x,plane.position.x*.26,2.5,dt);camera.position.y=THREE.MathUtils.damp(camera.position.y,plane.position.y+4.2,2,dt);camera.lookAt(plane.position.x*.34,plane.position.y-.15,-11);
+ aimDirection.set(0,0,-1).applyQuaternion(plane.quaternion).normalize();
+ aimPoint.copy(plane.position).addScaledVector(aimDirection,AIM_DISTANCE);
+ const projectedAim = aimPoint.clone().project(camera);
+ const aimVisible = projectedAim.z > -1 && projectedAim.z < 1;
+ ui.reticle.style.left = `${(projectedAim.x * 0.5 + 0.5) * innerWidth}px`;
+ ui.reticle.style.top = `${(-projectedAim.y * 0.5 + 0.5) * innerHeight}px`;
+ ui.reticle.style.opacity = aimVisible ? "0.82" : "0.22";
+ for(let i=bullets.length-1;i>=0;i--){const b=bullets[i];b.mesh.position.z-=dt*105;b.life-=dt;if(b.life<0){scene.remove(b.mesh);bullets.splice(i,1);continue;}for(let j=obstacles.length-1;j>=0;j--){const o=obstacles[j];if(b.mesh.position.distanceTo(o.group.position)<o.radius+1.3){explode(o.group.position);scene.remove(o.group);obstacles.splice(j,1);scene.remove(b.mesh);bullets.splice(i,1);score+=250;spawnObstacle(-185);break;}}}
+ for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.mesh.position.addScaledVector(p.velocity,dt);p.mesh.scale.multiplyScalar(.985);p.life-=dt;if(p.life<=0){scene.remove(p.mesh);particles.splice(i,1);}}
+ ui.altitude.textContent=Math.round(420+plane.position.y*55);ui.speed.textContent=Math.round(318+Math.abs(roll)*14);ui.score.textContent=String(score).padStart(6,"0");ui.ammo.style.width=`${Math.max(15,100-bullets.length*12)}%`;
 }
-
-const frontChevronMaterial = new THREE.MeshStandardMaterial({
-  color: 0x47f4ff,
-  emissive: 0x00bcd4,
-  emissiveIntensity: 2.2,
-  metalness: 0.15,
-  roughness: 0.24,
-});
-const frontChevron = new THREE.Group();
-frontChevron.position.set(0.67, 0.49, 0);
-for (const side of [-1, 1]) {
-  const marker = new THREE.Mesh(
-    new THREE.BoxGeometry(0.3, 0.035, 0.055),
-    frontChevronMaterial,
-  );
-  marker.rotation.y = side * 0.62;
-  frontChevron.add(marker);
-}
-device.add(frontChevron);
-
-const rearMarkerMaterial = new THREE.MeshStandardMaterial({
-  color: 0xff3bd4,
-  emissive: 0xb0008c,
-  emissiveIntensity: 2.3,
-  metalness: 0.15,
-  roughness: 0.24,
-});
-const rearMarker = new THREE.Mesh(
-  new THREE.BoxGeometry(0.08, 0.055, 0.72),
-  rearMarkerMaterial,
-);
-rearMarker.position.set(-0.72, 0.48, 0);
-device.add(rearMarker);
-
-const rearWing = new THREE.Mesh(
-  new THREE.BoxGeometry(0.5, 0.08, 0.9),
-  droneDarkMaterial,
-);
-rearWing.position.set(-0.56, 0.3, 0);
-device.add(rearWing);
-
-const morseAlphabet = {
-  J: ".---",
-  O: "---",
-  Y: "-.--",
-  D: "-..",
-  I: "..",
-  P: ".--",
-};
-const morseUnitSeconds = 0.14;
-const morseTimeline = [];
-
-"JOYDIP".split("").forEach((letter, letterIndex) => {
-  morseAlphabet[letter].split("").forEach((symbol, symbolIndex, symbols) => {
-    morseTimeline.push({
-      on: true,
-      duration: symbol === "." ? morseUnitSeconds : morseUnitSeconds * 3,
-    });
-    if (symbolIndex < symbols.length - 1) {
-      morseTimeline.push({ on: false, duration: morseUnitSeconds });
-    }
-  });
-  if (letterIndex < "JOYDIP".length - 1) {
-    morseTimeline.push({ on: false, duration: morseUnitSeconds * 3 });
-  }
-});
-
-const morseCycleDuration = morseTimeline.reduce(
-  (total, segment) => total + segment.duration,
-  0,
-);
-let morseTimelineIndex = 0;
-let morseSegmentStart = 0;
-
-function updateTailLight(timeSeconds) {
-  const cycleTime = timeSeconds % morseCycleDuration;
-  if (cycleTime < morseSegmentStart) {
-    morseTimelineIndex = 0;
-    morseSegmentStart = 0;
-  }
-
-  while (
-    cycleTime >=
-    morseSegmentStart + morseTimeline[morseTimelineIndex].duration
-  ) {
-    morseSegmentStart += morseTimeline[morseTimelineIndex].duration;
-    morseTimelineIndex =
-      (morseTimelineIndex + 1) % morseTimeline.length;
-  }
-
-  const isOn = morseTimeline[morseTimelineIndex].on;
-  rearMarkerMaterial.emissiveIntensity = isOn ? 2.3 : 0.12;
-  rearMarkerMaterial.color.setHex(isOn ? 0xff3bd4 : 0x3b123b);
-}
-
-const bladeRotors = [];
-const rotorPositions = [
-  [0.98, 0.98, 1],
-  [0.98, -0.98, -1],
-  [-0.98, 0.98, -1],
-  [-0.98, -0.98, 1],
-];
-
-function addRotor(x, z, direction) {
-  const rodLength = Math.hypot(x, z);
-  const rod = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.07, 0.07, 1.25, 10),
-    armamentMaterial,
-  );
-  rod.quaternion.setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    new THREE.Vector3(x, 0, z).normalize(),
-  );
-  rod.position.set(x / 2, 0.14, z / 2);
-  rod.scale.y = rodLength / 1.25;
-  device.add(rod);
-
-  const motor = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.22, 0.18, 0.24, 12),
-    droneDarkMaterial,
-  );
-  motor.position.set(x, 0.25, z);
-  device.add(motor);
-
-  const motorRing = new THREE.Mesh(
-    new THREE.TorusGeometry(0.18, 0.035, 8, 18),
-    droneGlowMaterial,
-  );
-  motorRing.rotation.x = Math.PI / 2;
-  motorRing.position.set(x, 0.39, z);
-  device.add(motorRing);
-
-  const rotor = new THREE.Group();
-  rotor.position.set(x, 0.43, z);
-  for (let bladeIndex = 0; bladeIndex < 2; bladeIndex += 1) {
-    const blade = new THREE.Mesh(
-      new THREE.BoxGeometry(0.68, 0.025, 0.1),
-      bladeMaterial,
-    );
-    blade.rotation.y = bladeIndex * Math.PI / 2;
-    blade.scale.x = bladeIndex === 0 ? 1 : direction;
-    rotor.add(blade);
-  }
-  device.add(rotor);
-  bladeRotors.push({ rotor, direction });
-}
-
-rotorPositions.forEach(([x, z, direction]) => addRotor(x, z, direction));
-
-function addWeaponPod(x, z) {
-  const pod = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.1, 0.62, 8),
-    armamentMaterial,
-  );
-  pod.rotation.z = Math.PI / 2;
-  pod.position.set(x, -0.08, z);
-  device.add(pod);
-
-  const nose = new THREE.Mesh(
-    new THREE.ConeGeometry(0.1, 0.2, 8),
-    weaponGlowMaterial,
-  );
-  nose.rotation.z = -Math.PI / 2;
-  nose.position.set(x + 0.4, -0.08, z);
-  device.add(nose);
-}
-
-addWeaponPod(0.24, 0.36);
-addWeaponPod(0.24, -0.36);
-
-const sensorEye = new THREE.Mesh(
-  new THREE.SphereGeometry(0.1, 12, 8),
-  weaponGlowMaterial,
-);
-sensorEye.position.set(0.68, 0.19, 0);
-device.add(sensorEye);
-
-const navigationLight = new THREE.PointLight(0xff3bd4, 1.8, 3);
-navigationLight.position.set(-0.5, 0.35, 0);
-device.add(navigationLight);
-
-const droneScale = 1.18;
-device.scale.setScalar(droneScale);
-scene.add(device);
-const ambientGrid = new THREE.GridHelper(18, 30, 0xff3bd4, 0x25135f);
-ambientGrid.position.set(0, -1.15, 0);
-ambientGrid.material.transparent = true;
-ambientGrid.material.opacity = 0.28;
-ambientGrid.material.depthWrite = false;
-scene.add(ambientGrid);
-
-const horizonGrid = new THREE.GridHelper(14, 12, 0x47f4ff, 0x101d4f);
-horizonGrid.rotation.x = Math.PI / 2;
-horizonGrid.position.set(0, 1.5, -5.5);
-horizonGrid.material.transparent = true;
-horizonGrid.material.opacity = 0.16;
-horizonGrid.material.depthWrite = false;
-scene.add(horizonGrid);
-
-const targetingRingMaterials = [
-  new THREE.MeshBasicMaterial({
-    color: 0x47f4ff,
-    transparent: true,
-    opacity: 0.22,
-  }),
-  new THREE.MeshBasicMaterial({
-    color: 0xff3bd4,
-    transparent: true,
-    opacity: 0.18,
-  }),
-  new THREE.MeshBasicMaterial({
-    color: 0x8d5cff,
-    transparent: true,
-    opacity: 0.14,
-  }),
-];
-[
-  [2.5, targetingRingMaterials[0]],
-  [3.7, targetingRingMaterials[1]],
-  [5.1, targetingRingMaterials[2]],
-].forEach(([radius, material]) => {
-  const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(radius, 0.012, 4, 48),
-    material,
-  );
-  ring.position.set(0, 0.8, -5.35);
-  scene.add(ring);
-});
-
-const ambientSpotGeometry = new THREE.PlaneGeometry(0.16, 0.16);
-const ambientSpots = [];
-
-function resetAmbientSpot(spot, initial = false) {
-  spot.duration = 1.6 + Math.random() * 2.6;
-  spot.age = initial ? Math.random() * spot.duration : 0;
-  spot.mesh.position.set(
-    -5.4 + Math.random() * 10.8,
-    -3.1 + Math.random() * 6.2,
-    -2.2,
-  );
-}
-
-for (let index = 0; index < 14; index += 1) {
-  const spot = new THREE.Mesh(
-    ambientSpotGeometry,
-    new THREE.MeshBasicMaterial({
-      color: 0x47f4ff,
-      transparent: true,
-      opacity: 0,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }),
-  );
-  const state = { mesh: spot, age: 0, duration: 2 };
-  resetAmbientSpot(state, true);
-  ambientSpots.push(state);
-  scene.add(spot);
-}
-
-const orientationStatus = document.querySelector("#orientation-status");
-const orientationButtons = document.querySelectorAll("[data-orientation]");
-const connectionForm = document.querySelector("#connection-form");
-const esp32HostInput = document.querySelector("#esp32-host");
-const connectionState = document.querySelector("#connection-state");
-const connectionToggle = document.querySelector("#connection-toggle");
-const connectionPanel = document.querySelector("#connection-panel");
-const quaternionReadout = document.querySelector("#quaternion-readout");
-const recenterButton = document.querySelector("#recenter-button");
-const musicToggle = document.querySelector("#music-toggle");
-const backgroundMusic = document.querySelector("#background-music");
-const queryHost = new URLSearchParams(window.location.search).get("esp32");
-let socket;
-let reconnectTimer;
-let latestQuaternion = { w: 1, x: 0, y: 0, z: 0 };
-const liveThreeQuaternion = new THREE.Quaternion();
-const referenceQuaternion = new THREE.Quaternion();
-const relativeQuaternion = new THREE.Quaternion();
-const renderedQuaternion = new THREE.Quaternion();
-let liveMode = false;
-const LIVE_SMOOTHING = 0.18;
-
-function setMusicState(isPlaying) {
-  musicToggle.classList.toggle("is-playing", isPlaying);
-  musicToggle.setAttribute("aria-pressed", String(isPlaying));
-  musicToggle.setAttribute(
-    "aria-label",
-    isPlaying ? "Pause background music" : "Play background music",
-  );
-}
-
-musicToggle.addEventListener("click", async () => {
-  if (backgroundMusic.paused) {
-    try {
-      await backgroundMusic.play();
-      setMusicState(true);
-    } catch {
-      setMusicState(false);
-    }
-  } else {
-    backgroundMusic.pause();
-    setMusicState(false);
-  }
-});
-
-backgroundMusic.addEventListener("pause", () => setMusicState(false));
-backgroundMusic.addEventListener("play", () => setMusicState(true));
-setMusicState(false);
-backgroundMusic
-  .play()
-  .then(() => setMusicState(true))
-  .catch(() => setMusicState(false));
-
-const sensorToThreeFrame = new THREE.Quaternion().setFromAxisAngle(
-  new THREE.Vector3(1, 0, 0),
-  Math.PI / 2,
-);
-const threeToSensorFrame = sensorToThreeFrame.clone().invert();
-const threeDirectionCorrection = new THREE.Quaternion().setFromAxisAngle(
-  new THREE.Vector3(1, 0, 0),
-  Math.PI,
-);
-const inverseDirectionCorrection = threeDirectionCorrection.clone().invert();
-const sensorQuaternionScratch = new THREE.Quaternion();
-
-function mapSensorQuaternionToThreeQuaternion({ w, x, y, z }, target) {
-  sensorQuaternionScratch.set(x, y, z, w).normalize();
-  target
-    .copy(sensorToThreeFrame)
-    .multiply(sensorQuaternionScratch)
-    .multiply(threeToSensorFrame)
-    .premultiply(threeDirectionCorrection)
-    .multiply(inverseDirectionCorrection)
-    .normalize();
-}
-
-function createTestQuaternion(axis, angle) {
-  const axisVector = new THREE.Vector3(...axis);
-  const quaternion = new THREE.Quaternion();
-  quaternion.setFromAxisAngle(axisVector, angle);
-  return { w: quaternion.w, x: quaternion.x, y: quaternion.y, z: quaternion.z };
-}
-
-const testOrientations = {
-  identity: { w: 1, x: 0, y: 0, z: 0 },
-  x: createTestQuaternion([1, 0, 0], Math.PI / 2),
-  y: createTestQuaternion([0, 1, 0], Math.PI / 2),
-  z: createTestQuaternion([0, 0, 1], Math.PI / 2),
-};
-
-function applyOrientation(orientation, label) {
-  device.quaternion.set(
-    orientation.x,
-    orientation.y,
-    orientation.z,
-    orientation.w,
-  );
-  device.quaternion.normalize();
-  orientationButtons.forEach((button) => {
-    button.setAttribute(
-      "aria-pressed",
-      String(button.dataset.orientation === label),
-    );
-  });
-  orientationStatus.value =
-    label === "identity" ? "Identity" : `${label.toUpperCase()} +90°`;
-}
-
-function selectOrientation(label) {
-  liveMode = false;
-  applyOrientation(testOrientations[label], label);
-}
-
-function selectLiveOrientation() {
-  liveMode = true;
-  orientationButtons.forEach((button) => {
-    button.setAttribute(
-      "aria-pressed",
-      String(button.dataset.orientation === "live"),
-    );
-  });
-  orientationStatus.value = "Live ESP32";
-}
-
-function updateRelativeOrientation() {
-  relativeQuaternion.copy(referenceQuaternion).invert();
-  relativeQuaternion.multiply(liveThreeQuaternion).normalize();
-}
-
-function recenterOrientation() {
-  if (!liveMode) {
-    return;
-  }
-
-  mapSensorQuaternionToThreeQuaternion(latestQuaternion, referenceQuaternion);
-  updateRelativeOrientation();
-}
-
-function setConnectionState(state) {
-  connectionState.dataset.state = state;
-  connectionState.textContent = `WebSocket: ${state.toUpperCase()}`;
-  connectionToggle.dataset.state = state;
-  if (state === "connected") {
-    setConnectionPanelVisible(false);
-  } else {
-    setConnectionPanelVisible(true);
-  }
-}
-
-function setConnectionPanelVisible(visible) {
-  connectionPanel.classList.toggle("is-hidden", !visible);
-  connectionToggle.setAttribute("aria-expanded", String(visible));
-}
-
-function updateQuaternionReadout() {
-  const { w, x, y, z } = latestQuaternion;
-  quaternionReadout.textContent = `W: ${w.toFixed(6)} | X: ${x.toFixed(6)} | Y: ${y.toFixed(6)} | Z: ${z.toFixed(6)}`;
-}
-
-function scheduleReconnect() {
-  clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(connectWebSocket, 3000);
-}
-
-function connectWebSocket() {
-  const host = esp32HostInput.value.trim();
-  clearTimeout(reconnectTimer);
-
-  if (!host) {
-    setConnectionState("disconnected");
-    return;
-  }
-
-  if (socket) {
-    socket.close();
-  }
-
-  setConnectionState("connecting");
-  const currentSocket = new WebSocket(`ws://${host}:81/`);
-  socket = currentSocket;
-
-  currentSocket.addEventListener("open", () => {
-    if (socket !== currentSocket) return;
-    setConnectionState("connected");
-    selectLiveOrientation();
-  });
-  currentSocket.addEventListener("message", (event) => {
-    try {
-      const packet = JSON.parse(event.data);
-      if (
-        packet.type !== "orientation" ||
-        !Number.isFinite(packet.w) ||
-        !Number.isFinite(packet.x) ||
-        !Number.isFinite(packet.y) ||
-        !Number.isFinite(packet.z)
-      ) {
-        return;
-      }
-      latestQuaternion.w = packet.w;
-      latestQuaternion.x = packet.x;
-      latestQuaternion.y = packet.y;
-      latestQuaternion.z = packet.z;
-      mapSensorQuaternionToThreeQuaternion(
-        latestQuaternion,
-        liveThreeQuaternion,
-      );
-      updateRelativeOrientation();
-      updateQuaternionReadout();
-    } catch {
-      return;
-    }
-  });
-  currentSocket.addEventListener("error", () => currentSocket.close());
-  currentSocket.addEventListener("close", () => {
-    if (socket !== currentSocket) return;
-    socket = undefined;
-    setConnectionState("disconnected");
-    scheduleReconnect();
-  });
-}
-
-orientationButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    if (button.dataset.orientation === "live") {
-      selectLiveOrientation();
-    } else {
-      selectOrientation(button.dataset.orientation);
-    }
-  });
-});
-
-connectionForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  connectWebSocket();
-});
-
-connectionToggle.addEventListener("click", () => {
-  setConnectionPanelVisible(connectionPanel.classList.contains("is-hidden"));
-});
-
-viewport.addEventListener("click", (event) => {
-  if (!connectionPanel.contains(event.target)) {
-    setConnectionPanelVisible(false);
-  }
-});
-
-recenterButton.addEventListener("click", recenterOrientation);
-
-window.addEventListener("keydown", (event) => {
-  const keyMap = { 1: "identity", 2: "x", 3: "y", 4: "z" };
-  const label = keyMap[event.key];
-  if (label) {
-    selectOrientation(label);
-  }
-});
-
-function resize() {
-  const width = viewport.clientWidth;
-  const height = viewport.clientHeight;
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
-  renderer.setSize(width, height, false);
-}
-
-function updateAmbientSpots(deltaTime) {
-  ambientSpots.forEach((spot) => {
-    spot.age += deltaTime;
-    if (spot.age >= spot.duration) {
-      resetAmbientSpot(spot);
-    }
-
-    const progress = spot.age / spot.duration;
-    spot.mesh.material.opacity = 0.075 * Math.sin(Math.PI * progress);
-  });
-}
-
-let previousAnimationTime;
-
-function animate(time) {
-  const deltaTime =
-    previousAnimationTime === undefined
-      ? 0
-      : Math.min((time - previousAnimationTime) / 1000, 0.1);
-  previousAnimationTime = time;
-  updateAmbientSpots(deltaTime);
-  bladeRotors.forEach(({ rotor, direction }) => {
-    rotor.rotation.y += deltaTime * 18 * direction;
-  });
-  updateTailLight(time / 1000);
-
-  if (liveMode) {
-    renderedQuaternion.slerp(relativeQuaternion, LIVE_SMOOTHING);
-    device.quaternion.copy(renderedQuaternion);
-  }
-  renderer.render(scene, camera);
-  requestAnimationFrame(animate);
-}
-
-window.addEventListener("resize", resize);
-resize();
-selectOrientation("identity");
-renderedQuaternion.identity();
-referenceQuaternion.identity();
-if (queryHost) {
-  esp32HostInput.value = queryHost;
-  connectWebSocket();
-} else {
-  setConnectionState("disconnected");
-}
-requestAnimationFrame(animate);
+function loop(){const dt=Math.min(clock.getDelta(),.05);update(dt);renderer.render(scene,camera);requestAnimationFrame(loop);} if(storedHost){connectConfigured();}else{setConnection("NOT CONFIGURED");}loop();

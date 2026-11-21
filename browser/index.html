@@ -3,96 +3,54 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MotionScope | 3D Orientation</title>
+    <meta name="theme-color" content="#061b2d" />
+    <title>Miami Saga — Flight Run</title>
     <link rel="stylesheet" href="./style.css" />
-    <script type="importmap">
-      {
-        "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.181.2/build/three.module.js"
-        }
-      }
-    </script>
   </head>
   <body>
-    <main class="app-shell">
-      <header class="app-header">
-        <button
-          id="connection-toggle"
-          class="status-dot"
-          type="button"
-          aria-label="Show connection controls"
-          aria-expanded="true"
-        ></button>
-        <h1>MotionScope</h1>
-        <span class="phase-label">3D orientation foundation</span>
-        <button
-          id="music-toggle"
-          class="music-toggle"
-          type="button"
-          aria-label="Play background music"
-          aria-pressed="false"
-        >
-          <span class="music-icon music-icon-play" aria-hidden="true">▶</span>
-          <span class="music-icon music-icon-pause" aria-hidden="true">Ⅱ</span>
-          <span class="music-label">AUDIO</span>
-        </button>
-      </header>
-      <div id="viewport" aria-label="MotionScope 3D viewport">
-        <aside
-          id="connection-panel"
-          class="test-panel"
-          aria-label="MotionScope controls"
-        >
-          <section class="connection-section" aria-label="WebSocket connection">
-            <div class="connection-heading">
-              <span class="panel-label">ESP32 link</span>
-              <span id="connection-state" data-state="disconnected"
-                >WebSocket: DISCONNECTED</span
-              >
-            </div>
-            <form id="connection-form">
-              <input
-                id="esp32-host"
-                name="esp32-host"
-                type="text"
-                inputmode="url"
-                value="192.168.10.207"
-                placeholder="ESP32 IP address"
-                autocomplete="off"
-              />
-              <button type="submit">Connect</button>
-            </form>
-          </section>
-          <span class="panel-label">Test orientation</span>
-          <div class="test-controls">
-            <button type="button" data-orientation="live">Live ESP32</button>
-            <button
-              type="button"
-              data-orientation="identity"
-              aria-pressed="true"
-            >
-              Identity
-            </button>
-            <button type="button" data-orientation="x">X +90°</button>
-            <button type="button" data-orientation="y">Y +90°</button>
-            <button type="button" data-orientation="z">Z +90°</button>
-          </div>
-          <output id="orientation-status">Identity</output>
-          <div class="live-quaternion" aria-live="polite">
-            <span class="panel-label">Live quaternion</span>
-            <output id="quaternion-readout"
-              >W: 1.000000 | X: 0.000000 | Y: 0.000000 | Z: 0.000000</output
-            >
-          </div>
-        </aside>
-        <button id="recenter-button" class="recenter-button" type="button">
-          Recenter
-        </button>
-      </div>
+    <main id="game-shell">
+      <canvas id="game" aria-label="Miami Saga flight game"></canvas>
+      <section class="hud top-hud" aria-label="Flight telemetry">
+        <div class="brand"><span>MIAMI</span> SAGA <small>FLIGHT RUN</small></div>
+        <div class="telemetry"><span>ALT <b id="altitude">420</b> FT</span><span>SPD <b id="speed">318</b> KTS</span><span>SCORE <b id="score">000000</b></span></div>
+      </section>
+      <section class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></section>
+      <section class="hud left-hud"><span class="label">WEAPON</span><strong>SKYFIRE / 20MM</strong><div class="ammo"><i id="ammo-bar"></i></div><span id="weapon-state">SAFE · PRESS TO ARM</span></section>
+      <section class="hud right-hud"><span id="connection-dot"></span><span id="connection-state">CONTROLLER NOT CONFIGURED</span><button id="config-button" type="button">CONFIGURE LINK</button><small>keyboard fallback: arrows / WASD · space to fire</small></section>
+      <section id="connection-panel" class="connection-panel" aria-labelledby="connection-title" hidden>
+        <form id="connection-form">
+          <div class="panel-heading"><span>CONTROLLER LINK</span><button id="close-config" type="button" aria-label="Close controller configuration">×</button></div>
+          <h2 id="connection-title">Configure ESP32</h2>
+          <p>Enter the IP address printed by the ESP32 serial monitor. The game connects over WebSocket port 81.</p>
+          <label for="esp32-host">ESP32 IP or host</label>
+          <input id="esp32-host" name="esp32-host" type="text" inputmode="url" autocomplete="off" placeholder="192.168.10.207" />
+          <output id="connection-error" aria-live="polite"></output>
+          <button type="submit">SAVE & CONNECT</button>
+        </form>
+      </section>
+      <section id="start-screen" aria-live="polite">
+        <p class="eyebrow">BISCAYNE SECTOR // 02:16</p>
+        <h1>MIAMI<br /><em>SKYLINE</em></h1>
+        <p>Fly low over the neon coastline. Tilt the MPU6050 to bank and climb. Use the GPIO 21 trigger to clear the flight path.</p>
+        <div class="landing-tabs" role="tablist" aria-label="Flight setup">
+          <button class="landing-tab active" type="button" data-tab="settings">FLIGHT SETTINGS</button>
+          <button class="landing-tab" type="button" data-tab="calibration">CALIBRATION</button>
+        </div>
+        <section class="landing-tab-panel active" data-panel="settings">
+          <label for="sensitivity">CONTROL SENSITIVITY <output id="sensitivity-value">72%</output></label>
+          <input id="sensitivity" type="range" min="45" max="100" value="72" step="1" />
+          <small>Lower values make banking and climb inputs gentler.</small>
+        </section>
+        <section class="landing-tab-panel" data-panel="calibration" hidden>
+          <strong>NEUTRAL CALIBRATION</strong>
+          <p>Place the MPU6050 flat and still, then restart the ESP32. The onboard RGB LED blinks red during calibration and turns off when ready.</p>
+        </section>
+        <button id="launch-button" type="button">START FLIGHT</button>
+        <small>Start with the controller flat — its neutral flight position is captured when the ESP32 boots.</small>
+      </section>
+      <button id="restart-button" class="restart-button" type="button" hidden>RESTART FLIGHT</button>
+      <div id="toast" role="status"></div>
     </main>
-    <audio id="background-music" loop preload="metadata">
-      <source src="./assets/bgmusic.mp3" type="audio/mpeg" />
-    </audio>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

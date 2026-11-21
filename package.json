@@ -1,0 +1,8 @@
+{
+  "name": "miami-saga-flight",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:web": "node --test browser/test/game-core.test.js"
+  }
+}
